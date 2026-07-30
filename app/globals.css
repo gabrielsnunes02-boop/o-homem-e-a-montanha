@@ -1,26 +1,43 @@
 @import "tailwindcss";
 
+@theme {
+  /* Paleta Oficial do Design System */
+  --color-bg-primary: #08110B;
+  --color-bg-secondary: #0D1B11;
+  --color-card-bg: #132416;
+  
+  --color-brand-green: #1E4D2B;
+  --color-brand-green-hover: #3F7D45;
+  --color-brand-orange: #F38B17;
+  
+  --color-text-white: #F5F5F5;
+  --color-text-gray: #A5A5A5;
+
+  /* Fontes */
+  --font-bebas: var(--font-bebas-neue), sans-serif;
+  --font-inter: var(--font-inter-sans), sans-serif;
+
+  /* Bordas Padronizadas */
+  --radius-card: 16px;
+  --radius-card-lg: 24px;
+  --radius-btn: 12px;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-white);
+  font-family: var(--font-inter);
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* Utilitários específicos de estética */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+  background-color: #08110B;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-bebas);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
