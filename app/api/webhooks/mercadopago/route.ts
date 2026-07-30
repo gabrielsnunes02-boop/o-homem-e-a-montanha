@@ -36,7 +36,7 @@ export async function POST(request: Request) {
           await db
             .update(registrations)
             .set({
-              status: "APPROVED",
+              status: "CONFIRMED",
             })
             .where(eq(registrations.registrationCode, registrationCode));
 

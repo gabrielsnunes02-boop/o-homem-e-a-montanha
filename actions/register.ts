@@ -127,7 +127,7 @@ export async function checkPaymentStatus(registrationId: string) {
 
     return {
       status: registration?.status || "PENDING",
-      isApproved: registration?.status === "APPROVED",
+      isApproved: registration?.status === "CONFIRMED",
     };
   } catch (error) {
     return { status: "PENDING", isApproved: false };
