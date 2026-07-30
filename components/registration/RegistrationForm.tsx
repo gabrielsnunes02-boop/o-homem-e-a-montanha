@@ -52,11 +52,16 @@ export const RegistrationForm = () => {
       const res = await createRegistration(formData);
 
       if (res.success && res.data) {
-        setPixResult(res.data);
-        setModalOpen(true);
-      } else {
-        setErrorMessage(res.error || "Ocorreu um erro ao processar. Tente novamente.");
-      }
+  setPixResult({
+    registrationId: res.data.registrationId,
+    qrCode: res.data.qrCodeBase64 || "", // Garante que nunca passe undefined para o estado
+    qrCodeCopyPaste: res.data.qrCodeCopyPaste || "",
+    amount: res.data.amount,
+  });
+  setModalOpen(true);
+} else {
+  setErrorMessage(res.error || "Ocorreu um erro ao processar. Tente novamente.");
+}
     } catch {
       setErrorMessage("Erro imprevisto ao se conectar com o servidor.");
     } finally {
