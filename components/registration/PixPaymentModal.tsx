@@ -1,23 +1,39 @@
 "use client";
 
-import React, { useState } from "react";
-import { Card } from "@/components/ui/Card";
+import React, { useState, useEffect } from "react";
+import { Check, Copy, MessageCircle, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Check, Copy, QrCode, X } from "lucide-react";
+import { checkPaymentStatus } from "@/actions/register";
 
-interface PixPaymentModalProps {
+interface PixModalProps {
   isOpen: boolean;
   onClose: () => void;
   pixData: {
     registrationId: string;
-    qrCode: string;
+    qrCodeBase64?: string;
     qrCodeCopyPaste: string;
     amount: number;
   } | null;
 }
 
-export const PixPaymentModal = ({ isOpen, onClose, pixData }: PixPaymentModalProps) => {
+export function PixPaymentModal({ isOpen, onClose, pixData }: PixModalProps) {
   const [copied, setCopied] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
+
+  // Polling: Consulta o Supabase a cada 4 segundos para saber se mudou para APPROVED
+  useEffect(() => {
+    if (!isOpen || !pixData?.registrationId || isPaid) return;
+
+    const interval = setInterval(async () => {
+      const res = await checkPaymentStatus(pixData.registrationId);
+      if (res.isApproved) {
+        setIsPaid(true);
+        clearInterval(interval);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [isOpen, pixData?.registrationId, isPaid]);
 
   if (!isOpen || !pixData) return null;
 
@@ -28,78 +44,94 @@ export const PixPaymentModal = ({ isOpen, onClose, pixData }: PixPaymentModalPro
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <Card className="bg-[#132416] border-[#1E4D2B] p-6 sm:p-8 max-w-md w-full relative shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-[#132416] border border-[#1E4D2B] rounded-2xl w-full max-w-md p-6 text-center relative shadow-2xl">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-[#A5A5A5] hover:text-white transition-colors cursor-pointer"
+          className="absolute top-4 right-4 text-[#A5A5A5] hover:text-white transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
 
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-[#1E4D2B]/30 text-[#F38B17] rounded-full flex items-center justify-center mx-auto mb-3">
-            <QrCode className="w-6 h-6" />
-          </div>
-          <h3 className="text-2xl font-bold text-[#F5F5F5] uppercase">
-            Inscrição Realizada!
-          </h3>
-          <p className="text-xs text-[#A5A5A5] mt-1">
-            Escaneie o QR Code abaixo ou copie a chave PIX para concluir o pagamento.
-          </p>
-        </div>
+        {!isPaid ? (
+          /* --- ETAPA 1: PENDENTE DE PAGAMENTO --- */
+          <>
+            <h3 className="text-xl font-extrabold uppercase text-[#F5F5F5] mb-1">
+              Pagamento via PIX
+            </h3>
+            <p className="text-xs text-[#A5A5A5] mb-4">
+              Escaneie o QR Code abaixo ou copie o código PIX para realizar o pagamento.
+            </p>
 
-        {/* Imagem do QR Code */}
-        <div className="bg-white p-4 rounded-2xl w-fit mx-auto mb-6 border-2 border-[#1E4D2B]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={pixData.qrCode}
-            alt="QR Code PIX"
-            className="w-48 h-48 object-contain"
-          />
-        </div>
+            {/* QR Code dinâmico do Mercado Pago */}
+            {pixData.qrCodeBase64 && (
+              <div className="bg-white p-3 rounded-xl inline-block mb-4 shadow-inner">
+                <img
+                  src={`data:image/png;base64,${pixData.qrCodeBase64}`}
+                  alt="QR Code PIX Mercado Pago"
+                  className="w-48 h-48 mx-auto object-contain"
+                />
+              </div>
+            )}
 
-        {/* Valor */}
-        <div className="text-center mb-6">
-          <span className="text-xs text-[#A5A5A5] uppercase font-semibold block">Valor a Pagar</span>
-          <span className="text-3xl font-extrabold text-[#F38B17]">
-            R$ {pixData.amount.toFixed(2).replace(".", ",")}
-          </span>
-        </div>
+            <div className="bg-[#08110B] border border-[#1E4D2B]/60 rounded-xl p-3 mb-4">
+              <span className="text-[10px] text-[#A5A5A5] uppercase font-bold block mb-1">
+                Valor Total
+              </span>
+              <span className="text-2xl font-extrabold text-[#F38B17]">
+                R$ {pixData.amount.toFixed(2).replace(".", ",")}
+              </span>
+            </div>
 
-        {/* PIX Copia e Cola */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs text-[#A5A5A5] uppercase font-bold">
-            PIX Copia e Cola
-          </label>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              readOnly
-              value={pixData.qrCodeCopyPaste}
-              className="bg-[#08110B] border border-[#1E4D2B] rounded-xl p-3 text-xs text-[#A5A5A5] flex-1 truncate focus:outline-none"
-            />
+            {/* Botão Copia e Cola */}
             <Button
               onClick={handleCopy}
-              className="px-4 py-3 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+              className="w-full bg-[#F38B17] hover:bg-[#d9780e] text-black font-extrabold py-3 rounded-xl flex items-center justify-center gap-2 mb-4 cursor-pointer"
             >
               {copied ? (
                 <>
-                  <Check className="w-4 h-4 text-green-400" /> COPIADO
+                  <Check className="w-4 h-4" /> CÓDIGO COPIADO!
                 </>
               ) : (
                 <>
-                  <Copy className="w-4 h-4" /> COPIAR
+                  <Copy className="w-4 h-4" /> COPIAR CÓDIGO PIX
                 </>
               )}
             </Button>
-          </div>
-        </div>
 
-        <p className="text-[11px] text-[#A5A5A5]/70 text-center mt-6">
-          Após a confirmação do pagamento, seu comprovante será processado e a vaga estará 100% garantida.
-        </p>
-      </Card>
+            {/* AVISO DE AGUARDANDO CONFIRMAÇÃO DO BANCO */}
+            <div className="bg-[#08110B] border border-[#1E4D2B]/80 rounded-xl p-3 flex items-center gap-3 text-left">
+              <Loader2 className="w-5 h-5 text-[#F38B17] animate-spin shrink-0" />
+              <p className="text-[11px] text-[#A5A5A5] leading-tight">
+                Aguardando confirmação do PIX... O botão para o grupo oficial do WhatsApp será liberado aqui automaticamente após o pagamento.
+              </p>
+            </div>
+          </>
+        ) : (
+          /* --- ETAPA 2: PAGAMENTO APROVADO (WHATSAPP LIBERADO) --- */
+          <div className="py-4 animate-fade-in">
+            <div className="w-16 h-16 bg-[#1E4D2B] text-[#25D366] border border-[#25D366]/40 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl font-extrabold shadow-lg">
+              ✓
+            </div>
+            <h3 className="text-2xl font-extrabold uppercase text-[#F5F5F5] mb-2">
+              Inscrição Confirmada!
+            </h3>
+            <p className="text-xs text-[#A5A5A5] mb-6 max-w-xs mx-auto leading-relaxed">
+              Seu pagamento foi identificado com sucesso! Clique abaixo para garantir sua entrada no grupo oficial dos participantes:
+            </p>
+
+            {/* BOTÃO DO WHATSAPP (SÓ EXISTE SE ISPAID FOR TRUE) */}
+            <a
+              href="https://chat.whatsapp.com/IgZIOybgkgB7UMrq7WUBFM?s=cl&p=a&mlu=0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full bg-[#25D366] hover:bg-[#20ba5a] text-black font-extrabold py-3.5 rounded-xl flex items-center justify-center gap-2 text-sm transition-transform active:scale-95 shadow-xl"
+            >
+              <MessageCircle className="w-5 h-5" /> ENTRAR NO GRUPO DO WHATSAPP
+            </a>
+          </div>
+        )}
+      </div>
     </div>
   );
-};
+}

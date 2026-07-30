@@ -81,14 +81,17 @@ export const events = pgTable(
 );
 
 // 3. Tabela: registrations
+// 3. Tabela: registrations
+// Em lib/db/schema.ts
 export const registrations = pgTable(
   "registrations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     registrationCode: text("registration_code").notNull().unique(),
-    eventId: uuid("event_id")
-      .references(() => events.id)
-      .notNull(),
+    
+    // TEM QUE SER TEXT SIMPLES (Sem .references e sem uuid())
+    eventId: text("event_id").notNull().default("event-01"),
+    
     fullName: text("full_name").notNull(),
     phone: text("phone").notNull(),
     email: text("email"),
