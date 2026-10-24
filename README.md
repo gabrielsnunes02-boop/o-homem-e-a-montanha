@@ -39,6 +39,9 @@ entre callbacks ("bloco real"), a latência de saída estimada e os underruns.
 
 ## Recursos
 
+- Timbres: **piano de cauda** e **Rhodes** (só o timbre ativo fica na memória;
+  o Rhodes usa ~33 MB de RAM e 4 MB no APK, graças aos samples com loop)
+
 - Piano Salamander Grand (Yamaha C5), 4 ou 8 camadas de velocity, 30 notas
   amostradas (interpolação cúbica entre elas)
 - Pedal de sustain (CC64), una corda (CC67), volume (CC7), all notes off
@@ -52,7 +55,8 @@ entre callbacks ("bloco real"), a latência de saída estimada e os underruns.
 app/src/main/cpp/engine/     motor portável (sampler, parser MIDI, reverb)
 app/src/main/cpp/android/    Oboe + AMidi + JNI
 app/src/main/java/...        UI (Jetpack Compose), conexão MIDI, serviço
-app/src/main/assets/samples  samples Ogg Vorbis já processados
+app/src/main/assets/samples  piano (Ogg Vorbis já processado)
+app/src/main/assets/rhodes   Rhodes (Ogg + regions.txt com loops)
 engine-tests/                testes do motor que rodam no PC
 tools/prepare_samples.py     gera os samples a partir dos FLACs originais
 ```
@@ -76,6 +80,11 @@ versionada de propósito, para que cada build instale por cima do anterior).
   [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/). Mapeamento de
   [sfzinstruments/SalamanderGrandPiano](https://github.com/sfzinstruments/SalamanderGrandPiano).
   Os samples foram cortados no início, encurtados na cauda e recodificados.
+- Rhodes: **jRhodes3c** (Rhodes Mark I Stage 73, 1977) por Jeff Learman,
+  [sfzinstruments/jlearman.jRhodes3c](https://github.com/sfzinstruments/jlearman.jRhodes3c),
+  licença [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/):
+  **uso não comercial**. Os samples processados em `app/src/main/assets/rhodes`
+  seguem a mesma licença. Gerados com `tools/prepare_rhodes.py`.
 - [Oboe](https://github.com/google/oboe), Apache 2.0.
 - [stb_vorbis](https://github.com/nothings/stb), domínio público / MIT.
 - Reverb baseado no Freeverb (Jezar at Dreampoint), domínio público.

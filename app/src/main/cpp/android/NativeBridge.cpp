@@ -406,7 +406,9 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetLightMode)(JNIEnv*, jobject, jboolean lig
     if (gApp) gApp->engine.lightMode = light;
 }
 
-JNIEXPORT void JNICALL JNI_FN(nativeLoadSamples)(JNIEnv*, jobject, jint layers) {
+// instrument: 0 = piano (Salamander, 4 ou 8 camadas), 1 = Rhodes (jRhodes3c).
+// So o instrumento ativo fica na memoria.
+JNIEXPORT void JNICALL JNI_FN(nativeLoadInstrument)(JNIEnv*, jobject, jint instrument, jint layers) {
     if (!gApp) return;
     App& app = *gApp;
     app.cancelLoad = true;
@@ -414,11 +416,13 @@ JNIEXPORT void JNICALL JNI_FN(nativeLoadSamples)(JNIEnv*, jobject, jint layers) 
     app.cancelLoad = false;
     app.loadState = 1;
     app.loadProgress = 0.f;
-    app.loader = std::thread([&app, layers] {
+    app.loader = std::thread([&app, instrument, layers] {
         // Libera o banco atual antes, para nao ter os dois na memoria ao mesmo tempo.
         unloadBank(app);
         std::string err;
-        auto bank = loadSampleBank(layers, readAsset, &app.loadProgress, &app.cancelLoad, &err);
+        auto bank = instrument == 1
+                        ? loadZoneBank("rhodes", 1.4f, readAsset, &app.loadProgress, &app.cancelLoad, &err)
+                        : loadSampleBank(layers, readAsset, &app.loadProgress, &app.cancelLoad, &err);
         if (!bank) {
             if (!app.cancelLoad) LOGE("%s", err.c_str());
             app.loadState = app.cancelLoad ? 0 : 3;
@@ -429,7 +433,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeLoadSamples)(JNIEnv*, jobject, jint layers) 
         app.bankBytes = static_cast<long long>(app.bank->bytes());
         app.engine.setBank(app.bank.get());
         app.loadState = 2;
-        LOGI("samples carregados: %d camadas, %.1f MB", layers, app.bankBytes / 1e6);
+        LOGI("instrumento %d carregado: %.1f MB", instrument, app.bankBytes / 1e6);
     });
 }
 

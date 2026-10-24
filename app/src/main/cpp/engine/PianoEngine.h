@@ -60,6 +60,8 @@ private:
         float gain = 0.f;
         float env = 1.f;
         float coef = 1.f;
+        float playCoef = 1.f;     // decaimento com a tecla presa (apos o hold)
+        int32_t holdFrames = 0;
         uint32_t age = 0;
     };
 

@@ -17,7 +17,8 @@ object NativeEngine {
     /** Bloqueia ~2,5 s. Retorna [melhor rota, intervalo de cada rota em decimos de ms (-1 = falhou)]. */
     external fun nativeProbeAudio(): IntArray
     external fun nativeSetLightMode(light: Boolean)
-    external fun nativeLoadSamples(layers: Int)
+    /** instrument: 0 = piano, 1 = Rhodes. So o instrumento ativo fica na memoria. */
+    external fun nativeLoadInstrument(instrument: Int, layers: Int)
     external fun nativeOpenMidiPort(device: MidiDevice, port: Int): Int
     external fun nativeCloseMidiPort(slot: Int)
     external fun nativeSendMidi(status: Int, d1: Int, d2: Int)

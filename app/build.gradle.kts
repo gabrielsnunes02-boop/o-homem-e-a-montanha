@@ -14,8 +14,8 @@ android {
         applicationId = "com.gabrielnunes.pianomidi"
         minSdk = 29 // Android 10: API nativa de MIDI (AMidi)
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")

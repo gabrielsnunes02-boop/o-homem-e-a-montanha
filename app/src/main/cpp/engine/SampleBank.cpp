@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <map>
 #include <mutex>
+#include <sstream>
 #include <thread>
 
 #define STB_VORBIS_HEADER_ONLY
@@ -44,6 +46,21 @@ std::string SampleBank::fileName(int region, int sourceLayer) {
 }
 
 const Sample* SampleBank::find(int key, float velocity, float* gain) const {
+    if (!zones.empty()) {
+        // Zona que contem a tecla; fora do teclado mapeado, a mais proxima.
+        const Zone* best = nullptr;
+        int bestDist = 1 << 30;
+        for (const Zone& z : zones) {
+            if (velocity < z.loVel - 0.5f || velocity > z.hiVel + 0.5f) continue;
+            const int dist = key < z.loKey ? z.loKey - key : (key > z.hiKey ? key - z.hiKey : 0);
+            if (dist < bestDist) { bestDist = dist; best = &z; }
+            if (dist == 0) break;
+        }
+        if (!best) return nullptr;
+        const float v = velocity / 127.f;
+        *gain = this->gain * v * v;  // amp_veltrack 100% do SFZ
+        return best->sample;
+    }
     if (layers.empty()) return nullptr;
     const int region = regionForKey(key);
     size_t i = 0;
@@ -66,6 +83,7 @@ size_t SampleBank::bytes() const {
     size_t total = 0;
     for (const auto& l : layers)
         for (const auto& s : l->samples) total += s.frames * 2 * sizeof(int16_t);
+    for (const auto& s : zoneSamples) total += s->frames * 2 * sizeof(int16_t);
     return total;
 }
 
@@ -131,5 +149,79 @@ std::unique_ptr<SampleBank> loadSampleBank(int numLayers, const FileReader& read
     for (auto& t : threads) t.join();
 
     if (failed.load() || (cancel && cancel->load())) return nullptr;
+    return bank;
+}
+
+std::unique_ptr<SampleBank> loadZoneBank(const std::string& dir, float gain, const FileReader& reader,
+                                         std::atomic<float>* progress,
+                                         const std::atomic<bool>* cancel,
+                                         std::string* error) {
+    std::vector<uint8_t> text;
+    if (!reader(dir + "/regions.txt", text)) {
+        if (error) *error = "mapa " + dir + "/regions.txt nao encontrado";
+        return nullptr;
+    }
+    auto bank = std::make_unique<SampleBank>();
+    bank->gain = gain;
+    std::map<std::string, Sample*> byName;
+    struct Pending { SampleBank::Zone zone; std::string file; };
+    std::vector<Pending> pending;
+
+    std::istringstream in(std::string(text.begin(), text.end()));
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ls(line);
+        std::string file;
+        int lk, hk, lv, hv, root;
+        uint32_t loopStart, loopEnd;
+        float hold, decay, sustainPct, release;
+        if (!(ls >> file >> lk >> hk >> lv >> hv >> root >> loopStart >> loopEnd >> hold >> decay >> sustainPct >> release))
+            continue;
+        if (!byName.count(file)) {
+            auto s = std::make_unique<Sample>();
+            s->rootKey = root;
+            s->loopStart = loopStart;
+            s->loopEnd = loopEnd > 0 ? loopEnd + 1 : 0;  // no SFZ/smpl o fim e inclusivo
+            s->holdSec = hold;
+            s->decaySec = decay;
+            s->sustainLevel = std::clamp(sustainPct / 100.f, 1e-4f, 1.f);
+            s->releaseSec = release;
+            byName[file] = s.get();
+            bank->zoneSamples.push_back(std::move(s));
+        }
+        pending.push_back({{lk, hk, lv, hv, byName[file]}, file});
+    }
+    if (pending.empty()) {
+        if (error) *error = "mapa vazio em " + dir;
+        return nullptr;
+    }
+
+    size_t done = 0;
+    std::vector<uint8_t> bytes;
+    for (auto& [name, sample] : byName) {
+        if (cancel && cancel->load()) return nullptr;
+        int channels = 0, rate = 0;
+        short* pcm = nullptr;
+        const int frames = reader(dir + "/" + name, bytes)
+                               ? stb_vorbis_decode_memory(bytes.data(), static_cast<int>(bytes.size()),
+                                                          &channels, &rate, &pcm)
+                               : -1;
+        if (frames <= 0 || channels != 2) {
+            std::free(pcm);
+            if (error) *error = "falha ao carregar " + dir + "/" + name;
+            return nullptr;
+        }
+        sample->data = pcm;
+        sample->frames = static_cast<uint32_t>(frames);
+        sample->sampleRate = static_cast<float>(rate);
+        sample->loudnessDb = measureLoudnessDb(*sample);
+        // A interpolacao le ate 2 frames adiante: o loop precisa terminar antes do fim.
+        if (sample->loopEnd + 3 > sample->frames || sample->loopEnd <= sample->loopStart + 4) {
+            sample->loopEnd = 0;
+        }
+        if (progress) progress->store(static_cast<float>(++done) / byName.size());
+    }
+    for (auto& p : pending) bank->zones.push_back(p.zone);
     return bank;
 }

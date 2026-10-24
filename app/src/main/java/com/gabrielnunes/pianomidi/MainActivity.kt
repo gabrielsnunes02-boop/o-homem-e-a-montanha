@@ -103,6 +103,12 @@ private fun PianoScreen(app: PianoApplication) {
     ) {
         Text("Piano MIDI", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White)
 
+        Section("Timbre") {
+            ChipRow(Instrument.entries.map { it.label }, settings.instrument.ordinal, columns = 2) { i ->
+                if (stats.loadState != 1) app.update { it.copy(instrument = Instrument.entries[i]) }
+            }
+        }
+
         StatusCard(app, devices, stats)
         ActivityCard(stats)
         LatencyCard(app, settings, stats)
@@ -137,14 +143,16 @@ private fun PianoScreen(app: PianoApplication) {
                 onReset = { app.update { it.copy(tuneHz = 440f) } })
         }
 
-        Section("Qualidade dos samples") {
-            ChipRow(listOf("4 camadas (~170 MB)", "8 camadas (~340 MB)"), if (settings.layers >= 8) 1 else 0) { i ->
-                app.update { it.copy(layers = if (i == 1) 8 else 4) }
+        if (settings.instrument == Instrument.PIANO) {
+            Section("Qualidade dos samples") {
+                ChipRow(listOf("4 camadas (~170 MB)", "8 camadas (~340 MB)"), if (settings.layers >= 8) 1 else 0) { i ->
+                    app.update { it.copy(layers = if (i == 1) 8 else 4) }
+                }
+                Text(
+                    "Mais camadas = mais nuances de dinâmica, porém mais RAM. Em aparelhos de 4 GB, prefira 4.",
+                    color = Color.Gray, fontSize = 12.sp,
+                )
             }
-            Text(
-                "Mais camadas = mais nuances de dinâmica, porém mais RAM. Em aparelhos de 4 GB, prefira 4.",
-                color = Color.Gray, fontSize = 12.sp,
-            )
         }
 
         Section("Sistema") {
@@ -163,7 +171,8 @@ private fun PianoScreen(app: PianoApplication) {
         }
 
         Text(
-            "Som: Salamander Grand Piano V3 (Yamaha C5) por Alexander Holm, licença CC-BY 3.0.",
+            "Piano: Salamander Grand Piano V3 (Yamaha C5) por Alexander Holm, CC-BY 3.0. " +
+                "Rhodes: jRhodes3c (Mark I Stage 73, 1977) por Jeff Learman, CC BY-NC-SA 4.0 (uso não comercial).",
             color = Color.Gray, fontSize = 11.sp,
         )
         Spacer(Modifier.height(24.dp))
@@ -186,11 +195,11 @@ private fun StatusCard(app: PianoApplication, devices: List<String>, s: EngineSt
         StatusLine(midiOk, if (midiOk) "Teclado: ${devices.joinToString()}" else "Conecte o teclado via cabo USB (OTG)")
         when (s.loadState) {
             1 -> {
-                Text("Carregando samples… ${(s.loadProgress * 100).toInt()}%", color = Color.White)
+                Text("Carregando timbre… ${(s.loadProgress * 100).toInt()}%", color = Color.White)
                 LinearProgressIndicator(progress = { s.loadProgress }, modifier = Modifier.fillMaxWidth())
             }
-            2 -> StatusLine(true, "Samples carregados (${s.bankMb} MB)")
-            3 -> StatusLine(false, "Erro ao carregar samples")
+            2 -> StatusLine(true, "Timbre carregado (${s.bankMb} MB)")
+            3 -> StatusLine(false, "Erro ao carregar o timbre")
         }
         if (!app.audioOk && s.sampleRate == 0) {
             StatusLine(false, "Falha ao abrir a saída de áudio")

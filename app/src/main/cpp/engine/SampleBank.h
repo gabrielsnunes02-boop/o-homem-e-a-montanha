@@ -20,6 +20,14 @@ struct Sample {
     float sampleRate = 48000.f;
     int rootKey = 60;
     float loudnessDb = -20.f;  // pico do ataque, usado para suavizar a curva de velocity
+
+    // Instrumentos com loop (Rhodes). loopEnd == 0: sem loop (toca ate o fim).
+    uint32_t loopStart = 0;
+    uint32_t loopEnd = 0;     // exclusivo
+    float holdSec = 0.f;      // tempo em volume maximo antes do decaimento
+    float decaySec = 0.f;     // 0 = sem decaimento enquanto a tecla esta presa
+    float sustainLevel = 1.f; // nivel alvo do decaimento (0..1)
+    float releaseSec = -1.f;  // <0: abafador do piano (depende da nota)
 };
 
 // Conjunto de samples: 30 regioes (de A0 a C8 em tercas menores) x N camadas.
@@ -44,7 +52,16 @@ public:
     // deixa a dinamica continua entre camadas vizinhas.
     const Sample* find(int key, float velocity, float* gain) const;
 
+    // Instrumento por zonas (mapa SFZ). Se houver zonas, find() usa elas.
+    struct Zone {
+        int loKey, hiKey, loVel, hiVel;
+        const Sample* sample;
+    };
+
     std::vector<std::unique_ptr<Layer>> layers;
+    std::vector<Zone> zones;
+    std::vector<std::unique_ptr<Sample>> zoneSamples;
+    float gain = 1.f;  // ajuste de volume do instrumento inteiro
     size_t bytes() const;
 };
 
@@ -56,3 +73,9 @@ std::unique_ptr<SampleBank> loadSampleBank(int numLayers, const FileReader& read
                                            std::atomic<float>* progress,
                                            const std::atomic<bool>* cancel,
                                            std::string* error);
+
+// Carrega um instrumento por zonas a partir de '<dir>/regions.txt'.
+std::unique_ptr<SampleBank> loadZoneBank(const std::string& dir, float gain, const FileReader& reader,
+                                         std::atomic<float>* progress,
+                                         const std::atomic<bool>* cancel,
+                                         std::string* error);

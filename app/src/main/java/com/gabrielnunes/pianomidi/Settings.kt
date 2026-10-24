@@ -10,7 +10,13 @@ enum class VelocityCurve(val label: String, val exponent: Float) {
     VERY_HEAVY("Muito pesado", 1.8f),
 }
 
+enum class Instrument(val label: String) {
+    PIANO("Piano de cauda"),
+    RHODES("Rhodes"),
+}
+
 data class Settings(
+    val instrument: Instrument = Instrument.PIANO,
     val volume: Float = 0.8f,
     val reverb: Float = 0.2f,
     val velocityCurve: VelocityCurve = VelocityCurve.NORMAL,
@@ -24,6 +30,7 @@ data class Settings(
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("instrument", instrument.name)
             .putFloat("volume", volume)
             .putFloat("reverb", reverb)
             .putString("velocityCurve", velocityCurve.name)
@@ -44,6 +51,8 @@ data class Settings(
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val d = Settings()
             return Settings(
+                instrument = runCatching { Instrument.valueOf(p.getString("instrument", null)!!) }
+                    .getOrDefault(d.instrument),
                 volume = p.getFloat("volume", d.volume),
                 reverb = p.getFloat("reverb", d.reverb),
                 velocityCurve = runCatching { VelocityCurve.valueOf(p.getString("velocityCurve", null)!!) }

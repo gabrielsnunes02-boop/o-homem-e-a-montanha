@@ -163,6 +163,11 @@ void PianoEngine::noteOn(int key, int velocity) {
     v->gain = layerGain * (1.f / 32768.f);
     v->env = 1.f;
     v->coef = 1.f;
+    // Envelope do SFZ (Rhodes): volume maximo durante o hold, depois decai ate o nivel de sustain.
+    v->holdFrames = static_cast<int32_t>(s->holdSec * sampleRate_);
+    v->playCoef = s->decaySec > 0.f
+                      ? std::pow(s->sustainLevel, 1.f / (s->decaySec * sampleRate_))
+                      : 1.f;
     v->age = ++ageCounter_;
 }
 
@@ -196,7 +201,8 @@ void PianoEngine::allNotesOff(bool hard) {
 
 void PianoEngine::release(Voice& v) {
     v.state = State::Releasing;
-    v.coef = decayCoef(releaseSeconds(v.soundKey));
+    const float rel = v.sample && v.sample->releaseSec > 0.f ? v.sample->releaseSec : releaseSeconds(v.soundKey);
+    v.coef = decayCoef(rel);
 }
 
 void PianoEngine::fade(Voice& v, float seconds) {
@@ -211,6 +217,8 @@ void PianoEngine::renderVoice(Voice& v, float* l, float* r, int n) {
     const Sample& s = *v.sample;
     const int16_t* data = s.data;
     const uint32_t last = s.frames > 3 ? s.frames - 3 : 0;
+    const uint32_t loopEnd = s.loopEnd;
+    const double loopLen = static_cast<double>(s.loopEnd) - s.loopStart;
     double pos = v.pos;
     const double inc = v.inc;
     float env = v.env;
@@ -218,6 +226,7 @@ void PianoEngine::renderVoice(Voice& v, float* l, float* r, int n) {
     const float gain = v.gain;
 
     for (int i = 0; i < n; ++i) {
+        if (loopEnd && pos >= loopEnd) pos -= loopLen;  // volta ao inicio do loop
         const uint32_t idx = static_cast<uint32_t>(pos);
         if (idx >= last) { v.state = State::Idle; break; }
         const float f = static_cast<float>(pos - idx);
@@ -245,7 +254,7 @@ void PianoEngine::renderVoice(Voice& v, float* l, float* r, int n) {
     }
     v.pos = pos;
     v.env = env;
-    if (v.state != State::Playing && env < 1e-4f) v.state = State::Idle;
+    if (env < 1e-4f) v.state = State::Idle;
 }
 
 void PianoEngine::render(float* out, int frames) {
@@ -263,6 +272,10 @@ void PianoEngine::render(float* out, int frames) {
         const bool light = lightMode.load(std::memory_order_relaxed);
         for (auto& v : voices_) {
             if (v.state == State::Idle) continue;
+            if (v.state == State::Playing && v.holdFrames >= 0) {
+                v.holdFrames -= n;
+                if (v.holdFrames < 0) v.coef = v.playCoef;
+            }
             if (light) renderVoice<false>(v, mixL_, mixR_, n);
             else renderVoice<true>(v, mixL_, mixR_, n);
         }

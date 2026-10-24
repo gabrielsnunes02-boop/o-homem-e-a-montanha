@@ -63,7 +63,7 @@ class PianoApplication : Application() {
         )
         NativeEngine.nativeSetLightMode(s.lightMode)
         applyParams(s)
-        NativeEngine.nativeLoadSamples(s.layers)
+        NativeEngine.nativeLoadInstrument(s.instrument.ordinal, s.layers)
         midi = MidiConnector(this).also { it.start() }
         if (s.audioRoute < 0) findLowestLatency()
     }
@@ -75,7 +75,11 @@ class PianoApplication : Application() {
         _settings.value = new
         new.save(this)
         applyParams(new)
-        if (new.layers != old.layers) NativeEngine.nativeLoadSamples(new.layers)
+        if (new.instrument != old.instrument ||
+            (new.instrument == Instrument.PIANO && new.layers != old.layers)
+        ) {
+            NativeEngine.nativeLoadInstrument(new.instrument.ordinal, new.layers)
+        }
         if (new.lightMode != old.lightMode) NativeEngine.nativeSetLightMode(new.lightMode)
         if (new.audioRoute != old.audioRoute || new.bufferBursts != old.bufferBursts) restartAudio()
         if (new.background != old.background) {

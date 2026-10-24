@@ -180,6 +180,81 @@ int main(int argc, char** argv) {
         std::printf("demo gravada em %s\n", wavOut.c_str());
     }
 
+    // ---- Rhodes (instrumento por zonas com loop) ----
+    {
+        t0 = std::chrono::steady_clock::now();
+        auto rhodes = loadZoneBank("rhodes", 1.4f, reader, &progress, nullptr, &err);
+        const double rs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(rhodes != nullptr);
+        if (!rhodes) { std::printf("erro: %s\n", err.c_str()); return 1; }
+        std::printf("rhodes: %zu zonas, %.1f MB, carregado em %.2f s\n", rhodes->zones.size(), rhodes->bytes() / 1e6, rs);
+        int looped = 0;
+        for (const auto& z : rhodes->zones) looped += z.sample->loopEnd > 0;
+        CHECK(looped > 50);
+
+        engine->setBank(rhodes.get());
+        engine->render(buf.data(), 64);
+        CHECK(engine->bankInUse() == rhodes.get());
+
+        // Nota grave segurada 6 s: o loop precisa sustentar alem do fim do sample.
+        float gain = 0.f;
+        const Sample* s29 = rhodes->find(29, 60.f, &gain);
+        CHECK(s29 && s29->loopEnd > 0);
+        engine->handleMidi(0x90, 29, 60);
+        float lateRms = 0.f;
+        bool finite = true;
+        float peak = 0.f;
+        for (int b = 0; b < 6 * sr / 480; ++b) {
+            engine->render(buf.data(), 480);
+            for (int i = 0; i < 960; ++i) { finite &= std::isfinite(buf[i]); peak = std::fmax(peak, std::fabs(buf[i])); }
+            if (b == 6 * sr / 480 - 1) {
+                for (int i = 0; i < 960; ++i) lateRms += buf[i] * buf[i];
+                lateRms = std::sqrt(lateRms / 960);
+            }
+        }
+        const float sampleSec = s29 ? s29->frames / s29->sampleRate : 0.f;
+        std::printf("  rhodes F1 segurado 6 s (sample de %.1f s): rms final %.4f, pico %.3f, vozes %d\n",
+                    sampleSec, lateRms, peak, engine->activeVoices.load());
+        CHECK(finite);
+        CHECK(lateRms > 1e-4f);
+        CHECK(engine->activeVoices.load() == 1);
+        engine->handleMidi(0x80, 29, 0);
+        for (int b = 0; b < sr / 480; ++b) engine->render(buf.data(), 480);  // release de 0,3 s
+        std::printf("  rhodes apos soltar (1 s): %d vozes\n", engine->activeVoices.load());
+        CHECK(engine->activeVoices.load() == 0);
+
+        // Todas as teclas e camadas tem zona.
+        int missing = 0;
+        for (int k = 21; k <= 108; ++k)
+            for (int v : {1, 50, 80, 100, 127}) { float g; missing += rhodes->find(k, static_cast<float>(v), &g) == nullptr; }
+        CHECK(missing == 0);
+
+        if (!wavOut.empty()) {
+            std::vector<float> out;
+            struct Ev { double t; uint8_t s, a, b; };
+            std::vector<Ev> evs;
+            const int prog[4][4] = {{50, 53, 57, 60}, {55, 59, 62, 65}, {48, 52, 55, 59}, {45, 48, 52, 55}};
+            for (int c = 0; c < 4; ++c) {
+                for (int k : prog[c]) { evs.push_back({c * 1.6, 0x90, (uint8_t)k, (uint8_t)(60 + c * 15)}); evs.push_back({c * 1.6 + 1.5, 0x80, (uint8_t)k, 0}); }
+                evs.push_back({c * 1.6, 0x90, (uint8_t)(prog[c][0] - 24), 90}); evs.push_back({c * 1.6 + 1.5, 0x80, (uint8_t)(prog[c][0] - 24), 0});
+            }
+            const int mel[] = {72, 74, 76, 79, 81, 79, 76, 74, 72};
+            for (int i = 0; i < 9; ++i) { evs.push_back({6.6 + i * 0.22, 0x90, (uint8_t)mel[i], (uint8_t)(40 + i * 10)}); evs.push_back({6.6 + i * 0.22 + 0.2, 0x80, (uint8_t)mel[i], 0}); }
+            std::sort(evs.begin(), evs.end(), [](const Ev& a, const Ev& b) { return a.t < b.t; });
+            size_t e = 0;
+            for (int f = 0; f < sr * 10; f += 96) {
+                while (e < evs.size() && evs[e].t * sr <= f) { engine->handleMidi(evs[e].s, evs[e].a, evs[e].b); ++e; }
+                engine->render(buf.data(), 96);
+                out.insert(out.end(), buf.begin(), buf.begin() + 192);
+            }
+            const std::string path = wavOut.substr(0, wavOut.size() - 4) + "-rhodes.wav";
+            writeWav(path, out, sr);
+            std::printf("demo rhodes gravada em %s\n", path.c_str());
+        }
+        engine->setBank(nullptr);
+        engine->render(buf.data(), 64);
+    }
+
     std::printf(failures ? "\n%d FALHA(S)\n" : "\nTODOS OS TESTES PASSARAM\n", failures);
     return failures ? 1 : 0;
 }
