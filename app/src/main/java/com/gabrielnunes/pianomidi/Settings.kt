@@ -1,0 +1,52 @@
+package com.gabrielnunes.pianomidi
+
+import android.content.Context
+
+enum class VelocityCurve(val label: String, val exponent: Float) {
+    VERY_LIGHT("Muito leve", 0.5f),
+    LIGHT("Leve", 0.75f),
+    NORMAL("Normal", 1.0f),
+    HEAVY("Pesado", 1.35f),
+    VERY_HEAVY("Muito pesado", 1.8f),
+}
+
+data class Settings(
+    val volume: Float = 0.8f,
+    val reverb: Float = 0.2f,
+    val velocityCurve: VelocityCurve = VelocityCurve.NORMAL,
+    val transpose: Int = 0,
+    val tuneHz: Float = 440f,
+    val layers: Int = 4,
+    val background: Boolean = true,
+) {
+    fun save(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putFloat("volume", volume)
+            .putFloat("reverb", reverb)
+            .putString("velocityCurve", velocityCurve.name)
+            .putInt("transpose", transpose)
+            .putFloat("tuneHz", tuneHz)
+            .putInt("layers", layers)
+            .putBoolean("background", background)
+            .apply()
+    }
+
+    companion object {
+        private const val PREFS = "settings"
+
+        fun load(context: Context): Settings {
+            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val d = Settings()
+            return Settings(
+                volume = p.getFloat("volume", d.volume),
+                reverb = p.getFloat("reverb", d.reverb),
+                velocityCurve = runCatching { VelocityCurve.valueOf(p.getString("velocityCurve", null)!!) }
+                    .getOrDefault(d.velocityCurve),
+                transpose = p.getInt("transpose", d.transpose),
+                tuneHz = p.getFloat("tuneHz", d.tuneHz),
+                layers = p.getInt("layers", d.layers),
+                background = p.getBoolean("background", d.background),
+            )
+        }
+    }
+}

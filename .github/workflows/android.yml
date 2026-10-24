@@ -1,0 +1,57 @@
+name: Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Testes do motor de audio (PC)
+        run: |
+          cmake -S engine-tests -B build-host -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-host -j
+          ./build-host/host_test app/src/main/assets
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Compilar APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piano-midi-apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Mover tag apk-latest
+        if: github.event_name == 'push'
+        run: |
+          git tag -f apk-latest
+          git push -f origin apk-latest
+
+      - name: Publicar APK na release "apk-latest"
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Piano MIDI (último build)
+          prerelease: true
+          files: app/build/outputs/apk/release/app-release.apk
+          body: |
+            Último APK compilado a partir de `${{ github.ref_name }}` (${{ github.sha }}).
+            Abra esta página no celular, baixe `app-release.apk` e instale.
