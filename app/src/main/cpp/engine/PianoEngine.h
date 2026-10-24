@@ -13,6 +13,7 @@ class PianoEngine {
 public:
     static constexpr int kPoolVoices = 128;
     static constexpr int kMaxActiveVoices = 72;
+    static constexpr int kMaxActiveVoicesLight = 40;
     static constexpr int kBlock = 128;
 
     // Prepara para a taxa de amostragem do dispositivo (nunca durante render).
@@ -36,6 +37,7 @@ public:
     std::atomic<float> velocityCurve{1.f};  // expoente: <1 = toque leve, >1 = pesado
     std::atomic<float> tuneHz{440.f};       // afinacao de A4
     std::atomic<int> transpose{0};          // semitons
+    std::atomic<bool> lightMode{false};     // CPU fraca: interpolacao linear e menos vozes
 
     // Estatisticas (leitura pela UI).
     std::atomic<int> activeVoices{0};
@@ -69,6 +71,7 @@ private:
     void fade(Voice& v, float seconds);
     Voice* allocateVoice();
     float decayCoef(float seconds) const;
+    template <bool kCubic>
     void renderVoice(Voice& v, float* l, float* r, int n);
     void drainQueue();
     void syncBank();

@@ -124,7 +124,7 @@ PianoEngine::Voice* PianoEngine::allocateVoice() {
         }
     }
     // Limite de polifonia: some rapidamente com a voz mais antiga (sem clique).
-    if (active >= kMaxActiveVoices) {
+    if (active >= (lightMode.load(std::memory_order_relaxed) ? kMaxActiveVoicesLight : kMaxActiveVoices)) {
         Voice* victim = oldestReleasing ? oldestReleasing : oldestPlaying;
         if (victim) fade(*victim, 0.02f);
     }
@@ -206,6 +206,7 @@ void PianoEngine::fade(Voice& v, float seconds) {
     v.held = false;
 }
 
+template <bool kCubic>
 void PianoEngine::renderVoice(Voice& v, float* l, float* r, int n) {
     const Sample& s = *v.sample;
     const int16_t* data = s.data;
@@ -222,14 +223,22 @@ void PianoEngine::renderVoice(Voice& v, float* l, float* r, int n) {
         const float f = static_cast<float>(pos - idx);
         const int16_t* p = data + 2 * idx;
         const int16_t* pm = idx ? p - 2 : p;
-        // Interpolacao cubica de Hermite (4 pontos) por canal.
-        for (int ch = 0; ch < 2; ++ch) {
-            const float x0 = pm[ch], x1 = p[ch], x2 = p[2 + ch], x3 = p[4 + ch];
-            const float c1 = 0.5f * (x2 - x0);
-            const float c2 = x0 - 2.5f * x1 + 2.f * x2 - 0.5f * x3;
-            const float c3 = 0.5f * (x3 - x0) + 1.5f * (x1 - x2);
-            const float y = ((c3 * f + c2) * f + c1) * f + x1;
-            (ch == 0 ? l : r)[i] += y * env * gain;
+        (void)pm;
+        const float g = env * gain;
+        if constexpr (kCubic) {
+            // Interpolacao cubica de Hermite (4 pontos) por canal.
+            for (int ch = 0; ch < 2; ++ch) {
+                const float x0 = pm[ch], x1 = p[ch], x2 = p[2 + ch], x3 = p[4 + ch];
+                const float c1 = 0.5f * (x2 - x0);
+                const float c2 = x0 - 2.5f * x1 + 2.f * x2 - 0.5f * x3;
+                const float c3 = 0.5f * (x3 - x0) + 1.5f * (x1 - x2);
+                const float y = ((c3 * f + c2) * f + c1) * f + x1;
+                (ch == 0 ? l : r)[i] += y * g;
+            }
+        } else {
+            // Linear: ~3x mais barata, diferenca quase inaudivel (no maximo 1 semitom de transposicao).
+            l[i] += (p[0] + f * (p[2] - p[0])) * g;
+            r[i] += (p[1] + f * (p[3] - p[1])) * g;
         }
         env *= coef;
         pos += inc;
@@ -251,8 +260,12 @@ void PianoEngine::render(float* out, int frames) {
         const int n = std::min(kBlock, frames - offset);
         std::fill(mixL_, mixL_ + n, 0.f);
         std::fill(mixR_, mixR_ + n, 0.f);
-        for (auto& v : voices_)
-            if (v.state != State::Idle) renderVoice(v, mixL_, mixR_, n);
+        const bool light = lightMode.load(std::memory_order_relaxed);
+        for (auto& v : voices_) {
+            if (v.state == State::Idle) continue;
+            if (light) renderVoice<false>(v, mixL_, mixR_, n);
+            else renderVoice<true>(v, mixL_, mixR_, n);
+        }
         if (wet > 0.001f) reverb_.process(mixL_, mixR_, mixL_, mixR_, n, wet);
         float* o = out + 2 * offset;
         for (int i = 0; i < n; ++i) {

@@ -9,12 +9,15 @@
 #include <jni.h>
 #include <oboe/Oboe.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "../engine/MidiParser.h"
 #include "../engine/PianoEngine.h"
@@ -26,6 +29,7 @@
 namespace {
 
 constexpr int kMaxPorts = 8;
+constexpr int kStatsSize = 20;
 
 struct MidiSlot {
     std::atomic<AMidiOutputPort*> port{nullptr};
@@ -33,9 +37,87 @@ struct MidiSlot {
     MidiParser parser;  // usado so pela thread de audio
 };
 
+// Combinacoes testadas na busca automatica. Cada aparelho libera o caminho
+// rapido de audio para uma combinacao diferente (Xiaomi/MediaTek variam muito).
+struct Route {
+    oboe::AudioApi api;
+    oboe::Usage usage;
+};
+constexpr Route kRoutes[] = {
+    {oboe::AudioApi::AAudio, oboe::Usage::Game},
+    {oboe::AudioApi::AAudio, oboe::Usage::Media},
+    {oboe::AudioApi::OpenSLES, oboe::Usage::Media},
+    {oboe::AudioApi::OpenSLES, oboe::Usage::Game},
+};
+constexpr int kNumRoutes = sizeof(kRoutes) / sizeof(kRoutes[0]);
+
+int64_t nowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void configureBuilder(oboe::AudioStreamBuilder& b, const Route& route) {
+    b.setDirection(oboe::Direction::Output)
+        ->setAudioApi(route.api)
+        ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+        ->setSharingMode(oboe::SharingMode::Exclusive)
+        ->setFormat(oboe::AudioFormat::Float)
+        ->setChannelCount(oboe::ChannelCount::Stereo)
+        ->setUsage(route.usage)
+        ->setContentType(oboe::ContentType::Music)
+        ->setFormatConversionAllowed(true)
+        ->setChannelConversionAllowed(true);
+}
+
+// Toca silencio e registra o instante de cada callback: o intervalo real entre
+// callbacks revela se o sistema deu o caminho rapido (~2-5 ms) ou o comum (~20 ms).
+class ProbeCallback : public oboe::AudioStreamDataCallback {
+public:
+    static constexpr int kMax = 1024;
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream* s, void* data, int32_t frames) override {
+        std::memset(data, 0, static_cast<size_t>(frames) * s->getBytesPerFrame());
+        const int i = count.load(std::memory_order_relaxed);
+        if (i < kMax) {
+            times[i] = nowNs();
+            count.store(i + 1, std::memory_order_release);
+        }
+        return oboe::DataCallbackResult::Continue;
+    }
+    int64_t times[kMax];
+    std::atomic<int> count{0};
+};
+
+// Retorna o intervalo p90 entre callbacks em ms, ou -1 se a rota falhar.
+double probeRoute(const Route& route) {
+    ProbeCallback cb;
+    oboe::AudioStreamBuilder b;
+    configureBuilder(b, route);
+    b.setDataCallback(&cb);
+    std::shared_ptr<oboe::AudioStream> stream;
+    if (b.openStream(stream) != oboe::Result::OK) return -1;
+    if (stream->getAudioApi() != route.api) { stream->close(); return -1; }
+    stream->setBufferSizeInFrames(stream->getFramesPerBurst() * 2);
+    if (stream->requestStart() != oboe::Result::OK) { stream->close(); return -1; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    stream->stop();
+    stream->close();
+    const int n = cb.count.load(std::memory_order_acquire);
+    std::vector<double> gaps;
+    for (int i = 11; i < n; ++i) gaps.push_back((cb.times[i] - cb.times[i - 1]) / 1e6);  // ignora o inicio
+    if (gaps.size() < 5) return -1;
+    std::sort(gaps.begin(), gaps.end());
+    return gaps[gaps.size() * 9 / 10];
+}
+
 class AudioOutput : public oboe::AudioStreamDataCallback, public oboe::AudioStreamErrorCallback {
 public:
     explicit AudioOutput(PianoEngine& engine) : engine_(engine) {}
+
+    void setConfig(int route, int bufferBursts) {
+        std::lock_guard<std::mutex> lock(streamMutex_);
+        route_ = std::clamp(route, 0, kNumRoutes - 1);
+        bufferBursts_ = std::clamp(bufferBursts, 1, 4);
+    }
 
     bool open() {
         std::lock_guard<std::mutex> lock(streamMutex_);
@@ -44,17 +126,33 @@ public:
 
     void close() {
         std::lock_guard<std::mutex> lock(streamMutex_);
-        wantRunning_ = false;
-        if (stream_) {
-            stream_->stop();
-            stream_->close();
-            stream_.reset();
+        closeLocked();
+    }
+
+    // Testa todas as rotas e reabre com a de menor intervalo entre callbacks.
+    // gapsTenthMs recebe o resultado de cada rota (decimos de ms, -1 = falhou).
+    int probe(int* gapsTenthMs) {
+        std::lock_guard<std::mutex> lock(streamMutex_);
+        probing_ = true;
+        closeLocked();
+        int best = -1;
+        double bestGap = 1e9;
+        for (int i = 0; i < kNumRoutes; ++i) {
+            const double gap = probeRoute(kRoutes[i]);
+            gapsTenthMs[i] = gap < 0 ? -1 : static_cast<int>(gap * 10);
+            LOGI("rota %d: intervalo p90 %.2f ms", i, gap);
+            // So troca se for claramente melhor (empate favorece a rota anterior).
+            if (gap > 0 && gap < bestGap - 0.5) { bestGap = gap; best = i; }
         }
-        tuner_.reset();
+        if (best >= 0) route_ = best;
+        openLocked();
+        probing_ = false;
+        return best;
     }
 
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream* stream, void* data, int32_t frames) override {
-        if (tuner_) tuner_->tune();
+        measureGap();
+        tune(stream);
         pollMidi();
         auto* out = static_cast<float*>(data);
         if (stream->getChannelCount() == 2) {
@@ -78,7 +176,6 @@ public:
         LOGI("stream fechado (%s), reabrindo", oboe::convertToText(error));
         std::lock_guard<std::mutex> lock(streamMutex_);
         stream_.reset();
-        tuner_.reset();
         if (wantRunning_) openLocked();
     }
 
@@ -110,35 +207,41 @@ public:
     }
 
     void fillStats(jint* s) {
-        std::lock_guard<std::mutex> lock(streamMutex_);
+        s[18] = probing_.load();
+        std::unique_lock<std::mutex> lock(streamMutex_, std::try_to_lock);
+        if (!lock.owns_lock()) return;  // busca em andamento: nao trava a UI
         s[0] = stream_ ? stream_->getSampleRate() : 0;
         s[1] = stream_ ? stream_->getFramesPerBurst() : 0;
         s[2] = stream_ ? stream_->getBufferSizeInFrames() : 0;
-        s[3] = stream_ ? stream_->getXRunCount().value() : 0;
+        auto xruns = stream_ ? stream_->getXRunCount() : oboe::ResultWithValue<int32_t>(oboe::Result::ErrorNull);
+        s[3] = xruns ? xruns.value() : -1;
         s[4] = stream_ && stream_->getSharingMode() == oboe::SharingMode::Exclusive;
         s[5] = stream_ && oboe::OboeExtensions::isMMapUsed(stream_.get());
         auto latency = stream_ ? stream_->calculateLatencyMillis() : oboe::ResultWithValue<double>(oboe::Result::ErrorNull);
         s[6] = latency ? static_cast<jint>(latency.value() * 10) : -1;  // decimos de ms
         s[7] = stream_ && stream_->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
+        s[16] = route_;
+        s[17] = stream_ && stream_->getAudioApi() == oboe::AudioApi::AAudio;
+        s[19] = gapTenthMs_.load(std::memory_order_relaxed);
     }
 
 private:
     static constexpr int kScratchFrames = 256;
 
+    void closeLocked() {
+        wantRunning_ = false;
+        if (stream_) {
+            stream_->stop();
+            stream_->close();
+            stream_.reset();
+        }
+    }
+
     bool openLocked() {
         wantRunning_ = true;
         oboe::AudioStreamBuilder b;
-        b.setDirection(oboe::Direction::Output)
-            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-            ->setSharingMode(oboe::SharingMode::Exclusive)
-            ->setFormat(oboe::AudioFormat::Float)
-            ->setChannelCount(oboe::ChannelCount::Stereo)
-            ->setUsage(oboe::Usage::Game)
-            ->setContentType(oboe::ContentType::Music)
-            ->setFormatConversionAllowed(true)
-            ->setChannelConversionAllowed(true)
-            ->setDataCallback(this)
-            ->setErrorCallback(this);
+        configureBuilder(b, kRoutes[route_]);
+        b.setDataCallback(this)->setErrorCallback(this);
         std::shared_ptr<oboe::AudioStream> stream;
         oboe::Result r = b.openStream(stream);
         if (r != oboe::Result::OK) {
@@ -148,21 +251,44 @@ private:
         engine_.prepare(static_cast<float>(stream->getSampleRate()));
         // Pede ao sistema para subir o clock da CPU quando a carga aumenta (acordes, pedal).
         stream->setPerformanceHintEnabled(true);
-        // Comeca com 2 bursts; o LatencyTuner aumenta so se houver underruns.
-        stream->setBufferSizeInFrames(stream->getFramesPerBurst() * 2);
-        tuner_ = std::make_unique<oboe::LatencyTuner>(*stream);
+        // Comeca com o minimo escolhido; tune() aumenta so se houver underruns.
+        stream->setBufferSizeInFrames(stream->getFramesPerBurst() * bufferBursts_);
+        lastXruns_ = 0;
+        lastCallbackNs_ = 0;
+        windowMaxNs_ = 0;
+        windowStartNs_ = 0;
         r = stream->requestStart();
         if (r != oboe::Result::OK) {
             LOGE("falha ao iniciar audio: %s", oboe::convertToText(r));
             stream->close();
-            tuner_.reset();
             return false;
         }
         stream_ = stream;
-        LOGI("audio: %d Hz, burst %d, buffer %d, mmap %d", stream->getSampleRate(),
+        LOGI("audio: rota %d, %d Hz, burst %d, buffer %d, mmap %d", route_, stream->getSampleRate(),
              stream->getFramesPerBurst(), stream->getBufferSizeInFrames(),
              oboe::OboeExtensions::isMMapUsed(stream.get()));
         return true;
+    }
+
+    // Aumenta o buffer em 1 burst a cada underrun novo.
+    void tune(oboe::AudioStream* stream) {
+        auto xruns = stream->getXRunCount();
+        if (!xruns || xruns.value() <= lastXruns_) return;
+        lastXruns_ = xruns.value();
+        const int32_t size = stream->getBufferSizeInFrames() + stream->getFramesPerBurst();
+        if (size <= stream->getBufferCapacityInFrames()) stream->setBufferSizeInFrames(size);
+    }
+
+    // Maior intervalo entre callbacks em janelas de 1 s (mostrado na tela).
+    void measureGap() {
+        const int64_t now = nowNs();
+        if (lastCallbackNs_ > 0) windowMaxNs_ = std::max(windowMaxNs_, now - lastCallbackNs_);
+        lastCallbackNs_ = now;
+        if (now - windowStartNs_ > 1000000000LL) {
+            if (windowStartNs_ > 0) gapTenthMs_.store(static_cast<int>(windowMaxNs_ / 100000), std::memory_order_relaxed);
+            windowStartNs_ = now;
+            windowMaxNs_ = 0;
+        }
     }
 
     void pollMidi() {
@@ -185,8 +311,15 @@ private:
     PianoEngine& engine_;
     std::mutex streamMutex_;
     std::shared_ptr<oboe::AudioStream> stream_;
-    std::unique_ptr<oboe::LatencyTuner> tuner_;
     bool wantRunning_ = false;
+    std::atomic<bool> probing_{false};
+    int route_ = 0;
+    int bufferBursts_ = 2;
+    int32_t lastXruns_ = 0;
+    int64_t lastCallbackNs_ = 0;
+    int64_t windowStartNs_ = 0;
+    int64_t windowMaxNs_ = 0;
+    std::atomic<int> gapTenthMs_{0};
     MidiSlot slots_[kMaxPorts];
     float scratch_[kScratchFrames * 2];
 };
@@ -232,18 +365,38 @@ void unloadBank(App& app) {
 
 extern "C" {
 
-JNIEXPORT jboolean JNICALL JNI_FN(nativeCreate)(JNIEnv* env, jobject, jobject assetManager) {
+JNIEXPORT jboolean JNICALL JNI_FN(nativeCreate)(JNIEnv* env, jobject, jobject assetManager,
+                                                jint nativeSampleRate, jint nativeBurst,
+                                                jint route, jint bufferBursts) {
     if (gApp) return JNI_TRUE;
+    // Valores nativos do aparelho: sem eles o OpenSL ES nunca ganha o caminho rapido.
+    if (nativeSampleRate > 0) oboe::DefaultStreamValues::SampleRate = nativeSampleRate;
+    if (nativeBurst > 0) oboe::DefaultStreamValues::FramesPerBurst = nativeBurst;
     gApp = new App();
+    gApp->audio.setConfig(route, bufferBursts);
     gApp->assetManagerRef = env->NewGlobalRef(assetManager);
     gApp->assets = AAssetManager_fromJava(env, gApp->assetManagerRef);
     return gApp->audio.open() ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL JNI_FN(nativeRestartAudio)(JNIEnv*, jobject) {
+JNIEXPORT void JNICALL JNI_FN(nativeConfigureAudio)(JNIEnv*, jobject, jint route, jint bufferBursts) {
     if (!gApp) return;
     gApp->audio.close();
+    gApp->audio.setConfig(route, bufferBursts);
     gApp->audio.open();
+}
+
+// Bloqueia ~2,5 s: chame fora da thread principal. Retorna [melhor rota, intervalo de cada rota].
+JNIEXPORT jintArray JNICALL JNI_FN(nativeProbeAudio)(JNIEnv* env, jobject) {
+    jint result[1 + kNumRoutes] = {-1};
+    if (gApp) result[0] = gApp->audio.probe(result + 1);
+    jintArray arr = env->NewIntArray(1 + kNumRoutes);
+    env->SetIntArrayRegion(arr, 0, 1 + kNumRoutes, result);
+    return arr;
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeSetLightMode)(JNIEnv*, jobject, jboolean light) {
+    if (gApp) gApp->engine.lightMode = light;
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeLoadSamples)(JNIEnv*, jobject, jint layers) {
@@ -316,8 +469,8 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetParams)(JNIEnv*, jobject, jfloat volume, 
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeGetStats)(JNIEnv* env, jobject, jintArray out) {
-    if (!gApp || env->GetArrayLength(out) < 16) return;
-    jint s[16] = {0};
+    if (!gApp || env->GetArrayLength(out) < kStatsSize) return;
+    jint s[kStatsSize] = {0};
     gApp->audio.fillStats(s);
     PianoEngine& e = gApp->engine;
     s[8] = e.activeVoices.load();
@@ -328,7 +481,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeGetStats)(JNIEnv* env, jobject, jintArray ou
     s[13] = gApp->loadState.load();
     s[14] = static_cast<jint>(gApp->loadProgress.load() * 1000);
     s[15] = static_cast<jint>(gApp->bankBytes.load() / (1024 * 1024));
-    env->SetIntArrayRegion(out, 0, 16, s);
+    env->SetIntArrayRegion(out, 0, kStatsSize, s);
 }
 
 }  // extern "C"

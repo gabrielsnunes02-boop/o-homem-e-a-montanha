@@ -105,6 +105,7 @@ private fun PianoScreen(app: PianoApplication) {
 
         StatusCard(app, devices, stats)
         ActivityCard(stats)
+        LatencyCard(app, settings, stats)
 
         Section("Som") {
             LabeledSlider("Volume", "${(settings.volume * 100).toInt()}%", settings.volume, 0f..1.5f) { v ->
@@ -193,20 +194,77 @@ private fun StatusCard(app: PianoApplication, devices: List<String>, s: EngineSt
         }
         if (!app.audioOk && s.sampleRate == 0) {
             StatusLine(false, "Falha ao abrir a saída de áudio")
+        } else if (s.probing) {
+            Text("Procurando a menor latência…", color = Color.White)
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         } else if (s.sampleRate > 0) {
-            StatusLine(s.lowLatency && s.mmap, buildString {
+            val fast = s.callbackGapMs in 0.1f..7f
+            StatusLine(fast, buildString {
                 append("Áudio ${s.sampleRate} Hz · buffer ${s.bufferFrames} (${fmt(s.bufferMs)} ms)")
                 if (s.latencyMs > 0) append(" · saída ≈ ${fmt(s.latencyMs, 0)} ms")
             })
             Text(
                 buildString {
-                    append(if (s.mmap) "MMAP ativo" else "MMAP indisponível")
-                    append(if (s.exclusive) " · exclusivo" else " · compartilhado")
-                    append(" · underruns ${s.xruns}")
+                    append(if (s.aaudio) "AAudio" else "OpenSL ES")
+                    if (s.callbackGapMs > 0) append(" · bloco real ${fmt(s.callbackGapMs)} ms")
+                    append(if (s.mmap) " · MMAP" else "")
+                    if (s.xruns >= 0) append(" · underruns ${s.xruns}")
                 },
                 color = Color.Gray, fontSize = 12.sp,
             )
         }
+    }
+}
+
+@Composable
+private fun LatencyCard(app: PianoApplication, settings: Settings, s: EngineStats) {
+    val results by app.probeResults.collectAsState()
+    Section("Latência") {
+        Button({ app.findLowestLatency() }, enabled = !s.probing, modifier = Modifier.fillMaxWidth()) {
+            Text(if (s.probing) "Testando…" else "Procurar menor latência")
+        }
+        Text(
+            "Testa as 4 combinações de áudio do Android e fica com a mais rápida (fica mudo por ~2 s).",
+            color = Color.Gray, fontSize = 12.sp,
+        )
+        Text("Combinação de áudio", color = Color.White)
+        ChipRow(
+            AUDIO_ROUTES.mapIndexed { i, name ->
+                val r = results.getOrNull(i)
+                when {
+                    results.isEmpty() -> name
+                    r == null -> "$name · falhou"
+                    else -> "$name · ${fmt(r)} ms"
+                }
+            },
+            settings.audioRoute.coerceAtLeast(0),
+            columns = 1,
+        ) { i -> if (!s.probing) app.update { it.copy(audioRoute = i) } }
+
+        Text("Buffer", color = Color.White)
+        ChipRow(listOf("1 bloco (mínimo)", "2 blocos (seguro)"), if (settings.bufferBursts <= 1) 0 else 1, columns = 2) { i ->
+            if (!s.probing) app.update { it.copy(bufferBursts = i + 1) }
+        }
+        Text(
+            "Com 1 bloco a latência cai, mas pode estalar em aparelhos fracos. Se estalar, o app aumenta o buffer sozinho.",
+            color = Color.Gray, fontSize = 12.sp,
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Modo leve (CPU fraca)", color = Color.White)
+                Text("Interpolação linear e até 40 vozes: usa ~4x menos CPU.", color = Color.Gray, fontSize = 12.sp)
+            }
+            Switch(settings.lightMode, { v -> app.update { it.copy(lightMode = v) } })
+        }
+
+        val d = app.deviceAudio
+        Text(
+            "Aparelho: ${d.nativeSampleRate} Hz, bloco nativo ${d.nativeBurst} frames" +
+                " · baixa latência: ${if (d.lowLatency) "sim" else "não"}" +
+                " · pro: ${if (d.pro) "sim" else "não"}",
+            color = Color.Gray, fontSize = 12.sp,
+        )
     }
 }
 
@@ -267,12 +325,12 @@ private fun LabeledSlider(
 }
 
 @Composable
-private fun ChipRow(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+private fun ChipRow(labels: List<String>, selected: Int, columns: Int = 3, onSelect: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        labels.chunked(3).forEachIndexed { row, chunk ->
+        labels.chunked(columns).forEachIndexed { row, chunk ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 chunk.forEachIndexed { col, label ->
-                    val i = row * 3 + col
+                    val i = row * columns + col
                     FilterChip(selected = i == selected, onClick = { onSelect(i) }, label = { Text(label) })
                 }
             }

@@ -18,6 +18,9 @@ data class Settings(
     val tuneHz: Float = 440f,
     val layers: Int = 4,
     val background: Boolean = true,
+    val audioRoute: Int = -1, // -1 = ainda nao buscou a menor latencia
+    val bufferBursts: Int = 2,
+    val lightMode: Boolean = false,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -28,6 +31,9 @@ data class Settings(
             .putFloat("tuneHz", tuneHz)
             .putInt("layers", layers)
             .putBoolean("background", background)
+            .putInt("audioRoute", audioRoute)
+            .putInt("bufferBursts", bufferBursts)
+            .putBoolean("lightMode", lightMode)
             .apply()
     }
 
@@ -46,7 +52,13 @@ data class Settings(
                 tuneHz = p.getFloat("tuneHz", d.tuneHz),
                 layers = p.getInt("layers", d.layers),
                 background = p.getBoolean("background", d.background),
+                audioRoute = p.getInt("audioRoute", d.audioRoute),
+                bufferBursts = p.getInt("bufferBursts", d.bufferBursts),
+                lightMode = p.getBoolean("lightMode", d.lightMode),
             )
         }
     }
 }
+
+/** Combinacoes de API/uso de audio, na mesma ordem de kRoutes no C++. */
+val AUDIO_ROUTES = listOf("AAudio · Game", "AAudio · Media", "OpenSL · Media", "OpenSL · Game")

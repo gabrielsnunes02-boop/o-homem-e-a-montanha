@@ -23,8 +23,19 @@ Requisitos: Android 10 ou mais novo (API nativa de MIDI).
 | Samples | o silêncio/pré-ataque do início de cada sample (3–17 ms) foi removido |
 | Motor | C++ sem alocação nem locks na thread de áudio; flush-to-zero contra denormais |
 
-A tela mostra a taxa, o tamanho do buffer, se o MMAP está ativo, a latência
-de saída estimada e o número de underruns.
+A tela mostra a taxa, o tamanho do buffer, a API em uso, o intervalo real
+entre callbacks ("bloco real"), a latência de saída estimada e os underruns.
+
+### Ajustes de latência (seção "Latência")
+
+- **Procurar menor latência**: testa AAudio e OpenSL ES com uso Game e Media
+  (cada aparelho libera o caminho rápido para uma combinação diferente),
+  mede o intervalo real entre callbacks e fica com a mais rápida. Roda
+  sozinho na primeira abertura.
+- **Buffer 1 bloco / 2 blocos**: 1 bloco é o mínimo possível; se houver
+  underrun, o buffer cresce 1 bloco por vez automaticamente.
+- **Modo leve**: interpolação linear e até 40 vozes (~4x menos CPU), para
+  aparelhos fracos aguentarem o buffer mínimo sem estalar.
 
 ## Recursos
 

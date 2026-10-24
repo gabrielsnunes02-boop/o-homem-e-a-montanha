@@ -9,8 +9,14 @@ object NativeEngine {
         System.loadLibrary("pianomidi")
     }
 
-    external fun nativeCreate(assets: AssetManager): Boolean
-    external fun nativeRestartAudio()
+    external fun nativeCreate(
+        assets: AssetManager, nativeSampleRate: Int, nativeBurst: Int, route: Int, bufferBursts: Int,
+    ): Boolean
+    external fun nativeConfigureAudio(route: Int, bufferBursts: Int)
+
+    /** Bloqueia ~2,5 s. Retorna [melhor rota, intervalo de cada rota em decimos de ms (-1 = falhou)]. */
+    external fun nativeProbeAudio(): IntArray
+    external fun nativeSetLightMode(light: Boolean)
     external fun nativeLoadSamples(layers: Int)
     external fun nativeOpenMidiPort(device: MidiDevice, port: Int): Int
     external fun nativeCloseMidiPort(slot: Int)
@@ -37,11 +43,15 @@ data class EngineStats(
     val loadState: Int = 0,
     val loadProgress: Float = 0f,
     val bankMb: Int = 0,
+    val route: Int = 0,
+    val aaudio: Boolean = false,
+    val probing: Boolean = false,
+    val callbackGapMs: Float = 0f,
 ) {
     val bufferMs: Float get() = if (sampleRate > 0) bufferFrames * 1000f / sampleRate else 0f
 
     companion object {
-        private val raw = IntArray(16)
+        private val raw = IntArray(20)
 
         fun read(): EngineStats {
             NativeEngine.nativeGetStats(raw)
@@ -52,6 +62,7 @@ data class EngineStats(
                 lowLatency = raw[7] != 0, voices = raw[8], lastNote = raw[9], lastVelocity = raw[10],
                 midiEvents = raw[11], sustain = raw[12] != 0, loadState = raw[13],
                 loadProgress = raw[14] / 1000f, bankMb = raw[15],
+                route = raw[16], aaudio = raw[17] != 0, probing = raw[18] != 0, callbackGapMs = raw[19] / 10f,
             )
         }
     }

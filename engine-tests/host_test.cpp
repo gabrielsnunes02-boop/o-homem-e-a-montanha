@@ -116,8 +116,9 @@ int main(int argc, char** argv) {
         CHECK(inversions == 0);
     }
 
-    // Estresse de CPU: pedal abaixado e 88 notas tocadas rapidamente.
-    {
+    // Estresse de CPU: pedal abaixado e 88 notas tocadas rapidamente (modo normal e leve).
+    for (bool light : {false, true}) {
+        engine->lightMode = light;
         engine->handleMidi(0xB0, 64, 127);
         const int seconds = 6;
         double renderTime = 0;
@@ -131,8 +132,9 @@ int main(int argc, char** argv) {
             renderTime += std::chrono::duration<double>(std::chrono::steady_clock::now() - s).count();
             for (int i = 0; i < 384; ++i) { maxAbs = std::fmax(maxAbs, std::fabs(buf[i])); finite &= std::isfinite(buf[i]); }
         }
-        std::printf("  estresse: %d vozes ativas, CPU %.2f%% de um nucleo (PC), pico %.3f\n",
+        std::printf("  estresse%s: %d vozes ativas, CPU %.2f%% de um nucleo (PC), pico %.3f\n", light ? " (modo leve)" : "",
                     engine->activeVoices.load(), 100.0 * renderTime / seconds, maxAbs);
+        if (light) CHECK(engine->activeVoices.load() <= PianoEngine::kMaxActiveVoicesLight + 24);
         CHECK(finite);
         CHECK(maxAbs <= 1.0f);
         CHECK(engine->activeVoices.load() <= PianoEngine::kPoolVoices);
@@ -142,6 +144,7 @@ int main(int argc, char** argv) {
         std::printf("  vozes apos soltar pedal: %d\n", engine->activeVoices.load());
         CHECK(engine->activeVoices.load() == 0);
     }
+    engine->lightMode = false;
 
     // Troca de banco: vozes antigas sao descartadas.
     engine->handleMidi(0x90, 60, 90);
