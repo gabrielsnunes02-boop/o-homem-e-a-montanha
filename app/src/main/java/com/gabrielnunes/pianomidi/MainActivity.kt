@@ -220,6 +220,12 @@ private fun StatusCard(app: PianoApplication, devices: List<String>, s: EngineSt
 private fun LatencyCard(app: PianoApplication, settings: Settings, s: EngineStats) {
     val results by app.probeResults.collectAsState()
     Section("Latência") {
+        if (app.recoveredFromCrash) {
+            Text(
+                "A última combinação de áudio fechou o app; voltei para a padrão.",
+                color = Color(0xFFE57373), fontSize = 13.sp,
+            )
+        }
         Button({ app.findLowestLatency() }, enabled = !s.probing, modifier = Modifier.fillMaxWidth()) {
             Text(if (s.probing) "Testando…" else "Procurar menor latência")
         }

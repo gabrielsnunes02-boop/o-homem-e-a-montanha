@@ -56,6 +56,13 @@ int64_t nowNs() {
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// O OboeExtensions::isMMapUsed trata qualquer stream como AAudio; com OpenSL ES
+// isso derruba o app. So consulta quando o stream e realmente AAudio.
+bool isMMap(oboe::AudioStream* stream) {
+    return stream && stream->getAudioApi() == oboe::AudioApi::AAudio &&
+           oboe::OboeExtensions::isMMapUsed(stream);
+}
+
 void configureBuilder(oboe::AudioStreamBuilder& b, const Route& route) {
     b.setDirection(oboe::Direction::Output)
         ->setAudioApi(route.api)
@@ -216,7 +223,7 @@ public:
         auto xruns = stream_ ? stream_->getXRunCount() : oboe::ResultWithValue<int32_t>(oboe::Result::ErrorNull);
         s[3] = xruns ? xruns.value() : -1;
         s[4] = stream_ && stream_->getSharingMode() == oboe::SharingMode::Exclusive;
-        s[5] = stream_ && oboe::OboeExtensions::isMMapUsed(stream_.get());
+        s[5] = isMMap(stream_.get());
         auto latency = stream_ ? stream_->calculateLatencyMillis() : oboe::ResultWithValue<double>(oboe::Result::ErrorNull);
         s[6] = latency ? static_cast<jint>(latency.value() * 10) : -1;  // decimos de ms
         s[7] = stream_ && stream_->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
@@ -266,7 +273,7 @@ private:
         stream_ = stream;
         LOGI("audio: rota %d, %d Hz, burst %d, buffer %d, mmap %d", route_, stream->getSampleRate(),
              stream->getFramesPerBurst(), stream->getBufferSizeInFrames(),
-             oboe::OboeExtensions::isMMapUsed(stream.get()));
+             isMMap(stream.get()));
         return true;
     }
 
